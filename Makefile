@@ -146,8 +146,6 @@ test:  ## Start envtest and run the unit tests.
 			-coverprofile=coverage.txt \
 			-covermode=atomic \
 			$(shell $(GOCMD) list ./pkg/... )
-	@sed -i \
-		-e '/pkg\/metrics/d' coverage.txt
 
 .PHONY: docker-build
 docker-build:  ## Build the extension Docker image.
