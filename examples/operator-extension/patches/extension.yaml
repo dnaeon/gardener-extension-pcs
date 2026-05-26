@@ -1,0 +1,22 @@
+apiVersion: operator.gardener.cloud/v1alpha1
+kind: Extension
+metadata:
+  name: pod-certificate-signer
+  annotations:
+    security.gardener.cloud/pod-security-enforce: baseline
+spec:
+  deployment:
+    extension:
+      helm:
+        ociRepository:
+          ref: registry.local.gardener.cloud:5001/helm-charts/gardener-extension-pcs:v0.1.0-dev
+  resources:
+    - kind: Extension
+      type: pod-certificate-signer
+      workerlessSupported: true
+      clusterCompatibility:
+        - shoot
+      lifecycle:
+        reconcile: BeforeKubeAPIServer
+        delete: AfterKubeAPIServer
+        migrate: AfterKubeAPIServer

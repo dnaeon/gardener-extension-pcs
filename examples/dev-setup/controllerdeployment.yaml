@@ -1,0 +1,9 @@
+---
+apiVersion: core.gardener.cloud/v1
+kind: ControllerDeployment
+metadata:
+  name: pod-certificate-signer
+helm:
+  ociRepository:
+    ref: registry.local.gardener.cloud:5001/helm-charts/gardener-extension-pcs:v0.1.0-dev
+  values: {}

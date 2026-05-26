@@ -1,0 +1,72 @@
+name: build-and-test
+on:
+  push:
+    branches-ignore:
+      - 'renovate/**'
+      - 'dependabot/**'
+
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  run-tests:
+    strategy:
+      matrix:
+        go-version: [1.26.x]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          check-latest: true
+      - name: Check Go module dependencies
+        run: |
+          set -eu
+          make gotidy
+          git diff -s --exit-code || ( echo 'Go module dependencies are of date, please run "make gotidy"' && exit 1 )
+      - name: Check generate
+        run: |
+          set -eu
+          make generate
+          git diff -s --exit-code || ( echo 'Generated files are of date, please run "make generate"' && exit 1 )
+      - name: Check license headers
+        run: |
+          set -eu
+          make checklicense
+      - name: Check for vulnerabilities
+        run: |
+          set -eu
+          make govulncheck
+      - name: Check for suggested fixes
+        run: |
+          set -eu
+          _fixes=$( make check-gofix )
+          if [[ -n "${_fixes}" ]]; then
+            echo "${_fixes}"
+            echo -e '\nSuggested fixes detected, please run "make gofix"'
+            exit 1
+          fi
+      - name: Run linter
+        run: |
+          set -eu
+          make goimports-reviser lint
+      - name: Run tests
+        run: |
+          set -eu
+          make test
+      - name: Build binary
+        run: |
+          set -eu
+          make build
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build OCI image
+        uses: docker/build-push-action@v7
+        with:
+          push: false
+          tags: gardener-extension-pcs:latest

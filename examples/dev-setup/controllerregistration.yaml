@@ -1,0 +1,25 @@
+---
+apiVersion: core.gardener.cloud/v1beta1
+kind: ControllerRegistration
+metadata:
+  name: pod-certificate-signer
+  annotations:
+    security.gardener.cloud/pod-security-enforce: baseline
+spec:
+  # https://gardener.cloud/docs/gardener/extensions/registration/#deployment-configuration-options
+  deployment:
+    policy: OnDemand
+    deploymentRefs:
+      - name: gardener-extension-pcs
+  # https://gardener.cloud/docs/gardener/extensions/registration/#extension-resource-configurations
+  resources:
+    - kind: Extension
+      type: pod-certificate-signer
+      workerlessSupported: true
+      clusterCompatibility:
+        - shoot
+      # https://gardener.cloud/docs/gardener/extensions/registration/#extension-lifecycle
+      lifecycle:
+        reconcile: BeforeKubeAPIServer
+        delete: AfterKubeAPIServer
+        migrate: AfterKubeAPIServer
