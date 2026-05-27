@@ -8,7 +8,6 @@ require (
 	github.com/go-logr/logr v1.4.3
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.41.0
-	github.com/prometheus/client_golang v1.23.3-0.20260518105423-c9d5bc4c50a9
 	github.com/urfave/cli/v3 v3.9.0
 	k8s.io/api v0.36.1
 	k8s.io/apiextensions-apiserver v0.36.1
@@ -126,6 +125,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.91.0 // indirect
 	github.com/prometheus/alertmanager v0.29.0 // indirect
+	github.com/prometheus/client_golang v1.23.3-0.20260518105423-c9d5bc4c50a9 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.6-0.20260224092343-e4c38a0aea47 // indirect
 	github.com/prometheus/otlptranslator v1.0.0 // indirect

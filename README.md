@@ -9,6 +9,9 @@ PodCertificateRequest signer as a Gardener Extension.
 - [GNU Make](https://www.gnu.org/software/make/)
 - [Docker](https://www.docker.com/) for local development
 - [Gardener Local Setup](https://gardener.cloud/docs/gardener/local_setup/) for local development
+- [Kubernetes](https://kubernetes.io) 1.35+ with the `PodCertificateRequest`,
+  `ClusterTrustBundleProjection`, and `ClusterTrustBundle` feature gates
+  enabled, and the `certificates.k8s.io/v1beta1` API group served.
 
 # Code structure
 
@@ -21,7 +24,6 @@ The project repo uses the following code structure.
 | `pkg/actuator`   | Implementations for the Gardener Extension `Actuator` interfaces                          |
 | `pkg/controller` | Utility wrappers for creating Kubernetes reconcilers for Gardener `Actuators`             |
 | `pkg/heartbeat`  | Utility wrappers for creating heartbeat reconcilers for Gardener extensions               |
-| `pkg/metrics`    | Metrics emitted by the extension                                                          |
 | `pkg/mgr`        | Utility wrappers for creating `controller-runtime` managers using functional options API  |
 | `pkg/version`    | Version metadata information about the extension                                          |
 | `internal/tools` | Go-based tools used for testing and linting the project                                   |
@@ -40,6 +42,77 @@ updating the `.spec.extensions` of your shoot manifest.
 spec:
   extensions:
     - type: pod-certificate-signer
+```
+
+Once the extension is installed in the shoot control-plane namespace a
+`pod-certificate-signer` managed resource will be created, which provides the
+resources of the `PodCertificateRequest` signer deployment.
+
+The signer name uses the following naming convention.
+
+- `certificates.gardener.cloud/shoot--<project>--<name>`
+
+In order to request certificates for pods and the associated
+`ClusterTrustBundle` of the signer your pods should use
+`PodCertificateProjection` and `ClusterTrustBundleProjection`.
+
+- [PodCertificateProjection](https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/#PodCertificateProjection)
+- [ClusterTrustBundleProjection](https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/#ClusterTrustBundleProjection)
+
+The following example deployment requests a pod certificate, which will be
+mounted in `/app/client/certs`. Also, the `ClusterTrustBundle` of our signer
+will be mounted in `/app/client/trust-bundle`.
+
+``` yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: curlclient
+  name: curlclient
+  namespace: shoot--local--local
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: curlclient
+  template:
+    metadata:
+      labels:
+        app: curlclient
+    spec:
+      containers:
+      - image: curlimages/curl
+        name: curl
+        command:
+          - sleep
+          - infinity
+        volumeMounts:
+        - name: trust-bundle
+          mountPath: /app/client/trust-bundle
+          readOnly: true
+        - name: certs
+          mountPath: /app/client/certs
+          readOnly: true
+      volumes:
+      - name: trust-bundle
+        projected:
+          defaultMode: 420
+          sources:
+          - clusterTrustBundle:
+              name: certificates.gardener.cloud:shoot--local--local:bundle
+              path: ca.pem
+      - name: certs
+        projected:
+          defaultMode: 420
+          sources:
+          - podCertificate:
+              keyType: RSA4096
+              maxExpirationSeconds: 28800
+              signerName: certificates.gardener.cloud/shoot--local--local
+              credentialBundlePath: credentialbundle.pem
+              userAnnotations:
+                dnaeon.github.io/dns-names: curlclient.shoot--local--local.svc.cluster.local
 ```
 
 # Development
