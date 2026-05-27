@@ -10,18 +10,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
 	"github.com/gardener/gardener/extensions/pkg/controller/extension"
 	v1beta1helper "github.com/gardener/gardener/pkg/api/core/v1beta1/helper"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
+	"github.com/gardener/gardener/pkg/client/kubernetes"
+	"github.com/gardener/gardener/pkg/utils/managedresources"
+	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
+	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/component-base/featuregate"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/gardener/gardener-extension-pcs/pkg/metrics"
+	"github.com/gardener/gardener-extension-pcs/pkg/imagevector"
 )
 
 // ErrInvalidActuator is an error which is returned when creating an [Actuator]
@@ -158,11 +164,6 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 	// [extensionsv1alpha1.Extension] resource.
 	clusterName := ex.Namespace
 
-	// Increment our example metrics counter
-	defer func() {
-		metrics.ActuatorOperationTotal.WithLabelValues(clusterName, "reconcile").Inc()
-	}()
-
 	logger.Info("reconciling extension", "name", ex.Name, "cluster", clusterName)
 
 	cluster, err := extensionscontroller.GetCluster(ctx, a.client, clusterName)
@@ -175,50 +176,85 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 		return nil
 	}
 
-	// TODO(user): implement the main reconciliation logic
+	secretsManager, err := a.newSecretsManager(ctx, logger, ex.Namespace)
+	if err != nil {
+		return fmt.Errorf("failed to create a new secrets manager: %w", err)
+	}
 
-	return nil
+	// Generate TLS secret for the CA
+	if _, err := secretsManager.Generate(ctx, &secretsutils.CertificateSecretConfig{
+		Name:       secretNameCACert,
+		CommonName: Name,
+		CertType:   secretsutils.CACert,
+		Validity:   new(30 * 24 * time.Hour),
+	}, secretsmanager.Rotate(secretsmanager.KeepOld), secretsmanager.IgnoreOldSecretsAfter(24*time.Hour)); err != nil {
+		return fmt.Errorf("failed to generate CA certificate secret: %w", err)
+	}
+
+	caSecret, _ := secretsManager.Get(secretNameCACert, secretsmanager.Current)
+	pscImage, err := imagevector.Images().FindImage(imagevector.ImageNamePodCertificateSigner)
+	if err != nil {
+		return fmt.Errorf("failed to find image for %s: %w", imagevector.ImageNamePodCertificateSigner, err)
+	}
+
+	// Bundle things up in a managed resource
+	registry := managedresources.NewRegistry(
+		kubernetes.SeedScheme,
+		kubernetes.SeedCodec,
+		kubernetes.SeedSerializer,
+	)
+
+	data, err := registry.AddAllAndSerialize(
+		a.getServiceAccount(ex.Namespace),
+		a.getRole(ex.Namespace),
+		a.getRoleBinding(ex.Namespace),
+		a.getClusterRole(ex.Namespace),
+		a.getClusterRoleBinding(ex.Namespace),
+		a.getService(ex.Namespace),
+		a.getDeployment(ex.Namespace, pscImage, caSecret),
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to add managed resources to registry: %w", err)
+	}
+
+	return managedresources.CreateForSeed(
+		ctx,
+		a.client,
+		ex.Namespace,
+		baseResourceName,
+		false,
+		data,
+	)
 }
 
 // Delete deletes any resources managed by the [Actuator]. This method
 // implements the [extension.Actuator] interface.
 func (a *Actuator) Delete(ctx context.Context, logger logr.Logger, ex *extensionsv1alpha1.Extension) error {
-	// Increment our example metrics counter
-	defer func() {
-		metrics.ActuatorOperationTotal.WithLabelValues(ex.Namespace, "delete").Inc()
-	}()
-
 	logger.Info("deleting resources managed by extension")
 
-	// TODO(user): implement logic for deleting anything managed by the extension
+	secretsManager, err := a.newSecretsManager(ctx, logger, ex.Namespace)
+	if err != nil {
+		return fmt.Errorf("failed creating a new secrets manager: %w", err)
+	}
 
-	return nil
+	if err := secretsManager.Cleanup(ctx); err != nil {
+		return fmt.Errorf("failed cleaning up secrets managed by secrets manager: %w", err)
+	}
+
+	return client.IgnoreNotFound(managedresources.DeleteForSeed(ctx, a.client, ex.Namespace, baseResourceName))
 }
 
 // ForceDelete signals the [Actuator] to delete any resources managed by it,
 // because of a force-delete event of the shoot cluster. This method implements
 // the [extension.Actuator] interface.
 func (a *Actuator) ForceDelete(ctx context.Context, logger logr.Logger, ex *extensionsv1alpha1.Extension) error {
-	// Increment our example metrics counter
-	defer func() {
-		metrics.ActuatorOperationTotal.WithLabelValues(ex.Namespace, "force_delete").Inc()
-	}()
-
-	logger.Info("shoot has been force-deleted, deleting resources managed by extension")
-
-	// TODO(user): implement logic for deleting anything managed by the extension
-
-	return nil
+	return a.Delete(ctx, logger, ex)
 }
 
 // Restore restores the resources managed by the extension [Actuator]. This
 // method implements the [extension.Actuator] interface.
 func (a *Actuator) Restore(ctx context.Context, logger logr.Logger, ex *extensionsv1alpha1.Extension) error {
-	// Increment our example metrics counter
-	defer func() {
-		metrics.ActuatorOperationTotal.WithLabelValues(ex.Namespace, "restore").Inc()
-	}()
-
 	return a.Reconcile(ctx, logger, ex)
 }
 
@@ -226,10 +262,20 @@ func (a *Actuator) Restore(ctx context.Context, logger logr.Logger, ex *extensio
 // because of a shoot control-plane migration event. This method implements the
 // [extension.Actuator] interface.
 func (a *Actuator) Migrate(ctx context.Context, logger logr.Logger, ex *extensionsv1alpha1.Extension) error {
-	// Increment our example metrics counter
-	defer func() {
-		metrics.ActuatorOperationTotal.WithLabelValues(ex.Namespace, "migrate").Inc()
-	}()
-
 	return a.Reconcile(ctx, logger, ex)
+}
+
+// newSecretsManager creates a new [secretsmanager.Interface] for the [Actuator].
+func (a *Actuator) newSecretsManager(ctx context.Context, logger logr.Logger, namespace string) (secretsmanager.Interface, error) {
+	m, err := secretsmanager.New(
+		ctx,
+		logger,
+		clock.RealClock{},
+		a.client,
+		fmt.Sprintf("gardener-extension-%s", a.Name()),
+		secretsmanager.WithCASecretAutoRotation(),
+		secretsmanager.WithNamespaces(namespace),
+	)
+
+	return m, err
 }
