@@ -1,0 +1,6 @@
+---
+images:
+- name: pod-certificate-signer
+  sourceRepository: github.com/dnaeon/pod-certificate-signer
+  repository: ghcr.io/dnaeon/pod-certificate-signer
+  tag: "v0.1.0"
