@@ -48,7 +48,7 @@ var ErrInvalidEnsurer = errors.New("invalid ensurer")
 // featureGates is the set of feature gates the ensurer enables on the shoot's
 // kube-apiserver, kube-controller-manager and kubelet.
 var featureGates = []string{
-	"PodCertificateRequests",
+	"PodCertificateRequest",
 	"ClusterTrustBundle",
 	"ClusterTrustBundleProjection",
 }
