@@ -7,13 +7,21 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Values.extension.name }}
     app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    networking.resources.gardener.cloud/from-world-to-ports: '[{"protocol":"TCP","port":{{ .Values.extension.webhook.port }}}]'
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - port: {{ .Values.service.port }}
-      targetPort: http
+    - port: {{ .Values.extension.webhook.port }}
+      targetPort: {{ .Values.extension.webhook.port }}
       protocol: TCP
-      name: http
+      name: webhook
+    {{- if .Values.extension.metrics.enable_scraping }}
+    - port: {{ .Values.extension.metrics.bind_address | trimPrefix ":" }}
+      targetPort: {{ .Values.extension.metrics.bind_address | trimPrefix ":" }}
+      protocol: TCP
+      name: metrics
+    {{- end }}
   selector:
     app.kubernetes.io/name: {{ .Values.extension.name }}
     app.kubernetes.io/instance: {{ .Release.Name }}

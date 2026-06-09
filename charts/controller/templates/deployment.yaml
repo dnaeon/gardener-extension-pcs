@@ -65,6 +65,8 @@ spec:
             {{- range $key, $val := .Values.gardener.gardenlet.featureGates }}
             - --gardenlet-feature-gate={{ $key }}={{ $val }}
             {{- end }}
+            - --webhook-server-port={{ .Values.extension.webhook.port }}
+            - --webhook-config-namespace={{ .Release.Namespace }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -81,6 +83,9 @@ spec:
               containerPort: {{ .Values.extension.metrics.bind_address | trimPrefix ":" }}
               protocol: TCP
             {{- end }}
+            - name: webhook
+              containerPort: {{ .Values.extension.webhook.port }}
+              protocol: TCP
           livenessProbe:
             failureThreshold: 3
             httpGet:

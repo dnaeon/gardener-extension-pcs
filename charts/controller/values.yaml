@@ -51,6 +51,12 @@ extension:
   leader_election:
     enabled: true
     election_id: extension-pod-certificate-signer-leader-election
+  # Webhook server settings. The controller serves the mutating webhook
+  # which enables the PodCertificateRequests, ClusterTrustBundle and
+  # ClusterTrustBundleProjection feature gates on the shoot's
+  # kube-apiserver / kube-controller-manager / kubelet.
+  webhook:
+    port: 9443
 # Extra values provided by gardenlet during extension deployment.
 #
 # See the links below for more details.
@@ -119,10 +125,17 @@ securityContext:
   capabilities:
     drop:
       - ALL
-  readOnlyRootFilesystem: true
+  # The Gardener Secrets Manager will dump the TLS secrets for the webhook
+  # server on the filesystem, so make sure that we don't run with read-only
+  # root filesystem.
+  readOnlyRootFilesystem: false
   runAsNonRoot: true
   runAsUser: 1000
 # Service settings.
+#
+# The Service exposes the webhook server (port .Values.extension.webhook.port)
+# so the kube-apiserver can call into the mutating webhook. If
+# `service.create` is set to false the webhook is unreachable.
 #
 # Check the following link for more details.
 #
@@ -133,9 +146,6 @@ service:
   # Service type.
   # See: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
   type: ClusterIP
-  # Service port.
-  # See: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
-  port: 80
 # Resources limits and requests
 #
 # Check the following link for more details.
