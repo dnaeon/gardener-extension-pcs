@@ -4,8 +4,14 @@
 
 // Package feature_gates provides a [genericmutator.Ensurer] implementation
 // which enables the Kubernetes feature gates required by the
-// pod-certificate-signer extension on the kube-apiserver, kube-controller-manager
-// and kubelet of the shoot cluster.
+// pod-certificate-signer extension on the kube-apiserver,
+// kube-controller-manager and kubelet of the shoot cluster.
+//
+// Enabling this extension is a contract.
+//
+// "Part of the ship, part of the crew"
+//
+// The gates ride along whether the operator likes it or not.
 package feature_gates
 
 import (
@@ -47,11 +53,17 @@ var featureGates = []string{
 	"ClusterTrustBundleProjection",
 }
 
-// featureGatesArgPrefix is the prefix of the `--feature-gates' command-line
-// option used by the kube-apiserver and kube-controller-manager. The kubelet
-// receives the same gates via its config file rather than via command-line
-// flags, so this prefix is not used for kubelet mutation.
-const featureGatesArgPrefix = "--feature-gates="
+const (
+	// featureGatesArgPrefix is the prefix of the `--feature-gates' command-line
+	// option used by the kube-apiserver and kube-controller-manager. The kubelet
+	// receives the same gates via its config file rather than via command-line
+	// flags, so this prefix is not used for kubelet mutation.
+	featureGatesArgPrefix = "--feature-gates="
+
+	// runtimeConfigArgPrefix is the prefix of the `--runtime-config' command-line
+	// option used by the kube-apiserver.
+	runtimeConfigArgPrefix = "--runtime-config="
+)
 
 // ensurer is an implementation of [genericmutator.Ensurer] which enables a
 // fixed set of feature gates required by the pod-certificate-signer extension
@@ -96,7 +108,35 @@ func (e *ensurer) EnsureKubeAPIServerDeployment(ctx context.Context, gctx extens
 		return err
 	}
 
-	return e.ensureFeatureGatesOnContainer(newObj, v1beta1constants.DeploymentNameKubeAPIServer)
+	if newObj == nil {
+		return nil
+	}
+
+	c := extensionswebhook.ContainerWithName(newObj.Spec.Template.Spec.Containers, v1beta1constants.DeploymentNameKubeAPIServer)
+	if c == nil {
+		return nil
+	}
+
+	// Enable feature gates and certificates.k8s.io/v1beta1 API group
+	extensionswebhook.LogMutation(e.logger, newObj.Kind, newObj.Namespace, newObj.Name)
+	for _, fg := range featureGates {
+		feature := fmt.Sprintf("%s=true", fg)
+		c.Args = extensionswebhook.EnsureStringWithPrefixContains(
+			c.Args,
+			featureGatesArgPrefix,
+			feature,
+			",",
+		)
+	}
+
+	c.Args = extensionswebhook.EnsureStringWithPrefixContains(
+		c.Args,
+		runtimeConfigArgPrefix,
+		"certificates.k8s.io/v1beta1=true",
+		",",
+	)
+
+	return nil
 }
 
 // EnsureKubeControllerManagerDeployment implements the [genericmutator.Ensurer]
@@ -108,7 +148,28 @@ func (e *ensurer) EnsureKubeControllerManagerDeployment(ctx context.Context, gct
 		return err
 	}
 
-	return e.ensureFeatureGatesOnContainer(newObj, v1beta1constants.DeploymentNameKubeControllerManager)
+	if newObj == nil {
+		return nil
+	}
+
+	c := extensionswebhook.ContainerWithName(newObj.Spec.Template.Spec.Containers, v1beta1constants.DeploymentNameKubeControllerManager)
+	if c == nil {
+		return nil
+	}
+
+	// Enable feature gates
+	extensionswebhook.LogMutation(e.logger, newObj.Kind, newObj.Namespace, newObj.Name)
+	for _, fg := range featureGates {
+		feature := fmt.Sprintf("%s=true", fg)
+		c.Command = extensionswebhook.EnsureStringWithPrefixContains(
+			c.Command,
+			featureGatesArgPrefix,
+			feature,
+			",",
+		)
+	}
+
+	return nil
 }
 
 // EnsureKubeletConfiguration implements the [genericmutator.Ensurer]
@@ -129,10 +190,10 @@ func (e *ensurer) EnsureKubeletConfiguration(ctx context.Context, gctx extension
 	return nil
 }
 
-// shouldSkip is a predicate, which returns true if the webhook should not
-// mutate the current object. It returns true when the cluster lookup fails for
-// an expected reason, the shoot is hibernated, the shoot is being deleted, or
-// the extension is not enabled in the shoot spec.
+// shouldSkip is a predicate which returns true if the webhook should not
+// mutate the current object. It returns true when the shoot is missing,
+// being deleted, hibernated, or the extension is not enabled in the shoot
+// spec. Cluster-lookup failures are returned to the caller as errors.
 func (e *ensurer) shouldSkip(ctx context.Context, gctx extensionswebhookctx.GardenContext) (bool, error) {
 	cluster, err := gctx.GetCluster(ctx)
 	if err != nil {
@@ -173,33 +234,6 @@ func (e *ensurer) isExtensionEnabled(shoot *gardencorev1beta1.Shoot) bool {
 	}
 
 	return true
-}
-
-// ensureFeatureGatesOnContainer ensures that the `--feature-gates' argument of
-// the named container in the given Deployment includes all required feature
-// gates and are enabled.
-//
-// Enabling this extension is a contract.
-//
-// "Part of the ship, part of the crew"
-//
-// The gates ride along whether the operator likes it or not.
-func (e *ensurer) ensureFeatureGatesOnContainer(dep *appsv1.Deployment, containerName string) error {
-	if dep == nil {
-		return nil
-	}
-
-	c := extensionswebhook.ContainerWithName(dep.Spec.Template.Spec.Containers, containerName)
-	if c == nil {
-		return nil
-	}
-
-	extensionswebhook.LogMutation(e.logger, dep.Kind, dep.Namespace, dep.Name)
-	for _, fg := range featureGates {
-		c.Args = extensionswebhook.EnsureStringWithPrefixContains(c.Args, featureGatesArgPrefix, fg+"=true", ",")
-	}
-
-	return nil
 }
 
 // NewWebhook returns a new mutating [extensionswebhook.Webhook] which enables
