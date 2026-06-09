@@ -17,10 +17,12 @@ import (
 	v1beta1helper "github.com/gardener/gardener/pkg/api/core/v1beta1/helper"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	"github.com/gardener/gardener/pkg/utils/managedresources"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/component-base/featuregate"
@@ -171,7 +173,13 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 		return fmt.Errorf("failed to get cluster: %w", err)
 	}
 
-	// Nothing to do here, if the shoot cluster is hibernated at the moment.
+	// Nothing to do if the shoot is missing, hibernated, or being deleted.
+	if cluster.Shoot == nil {
+		return nil
+	}
+	if cluster.Shoot.GetDeletionTimestamp() != nil {
+		return nil
+	}
 	if v1beta1helper.HibernationIsEnabled(cluster.Shoot) {
 		return nil
 	}
@@ -181,7 +189,9 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 		return fmt.Errorf("failed to create a new secrets manager: %w", err)
 	}
 
-	// Generate TLS secret for the CA
+	// Generate the CA certificate secret. The signer pod mounts it from the
+	// shoot control-plane namespace in the seed and serves the
+	// PodCertificateRequests with it.
 	if _, err := secretsManager.Generate(ctx, &secretsutils.CertificateSecretConfig{
 		Name:       secretNameCACert,
 		CommonName: Name,
@@ -192,39 +202,80 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 	}
 
 	caSecret, _ := secretsManager.Get(secretNameCACert, secretsmanager.Current)
-	pscImage, err := imagevector.Images().FindImage(imagevector.ImageNamePodCertificateSigner)
+	pcsImage, err := imagevector.Images().FindImage(imagevector.ImageNamePodCertificateSigner)
 	if err != nil {
 		return fmt.Errorf("failed to find image for %s: %w", imagevector.ImageNamePodCertificateSigner, err)
 	}
 
-	// Bundle things up in a managed resource
-	registry := managedresources.NewRegistry(
+	// Reconcile the shoot-access secret. gardener-resource-manager will
+	// populate it with a token for the [shootServiceAccountName] in the
+	// shoot's kube-system namespace.
+	accessSecret := gardenerutils.NewShootAccessSecret(shootServiceAccountName, ex.Namespace)
+	if err := accessSecret.Reconcile(ctx, a.client); err != nil {
+		return fmt.Errorf("failed to reconcile shoot access secret: %w", err)
+	}
+
+	// The generic-token-kubeconfig secret name is set as an annotation on
+	// the Cluster resource by gardenlet.
+	genericKubeconfigName := extensionscontroller.GenericTokenKubeconfigSecretNameFromCluster(cluster)
+
+	// Seed-side managed resource: ServiceAccount, Service, and Deployment.
+	deployment := a.getDeployment(ex.Namespace, pcsImage, caSecret)
+	if err := gardenerutils.InjectGenericKubeconfig(deployment, genericKubeconfigName, accessSecret.Secret.Name); err != nil {
+		return fmt.Errorf("failed to inject generic kubeconfig into signer deployment: %w", err)
+	}
+
+	seedRegistry := managedresources.NewRegistry(
 		kubernetes.SeedScheme,
 		kubernetes.SeedCodec,
 		kubernetes.SeedSerializer,
 	)
 
-	data, err := registry.AddAllAndSerialize(
-		a.getServiceAccount(ex.Namespace),
-		a.getRole(ex.Namespace),
-		a.getRoleBinding(ex.Namespace),
-		a.getClusterRole(ex.Namespace),
-		a.getClusterRoleBinding(ex.Namespace),
+	seedData, err := seedRegistry.AddAllAndSerialize(
+		a.getSeedServiceAccount(ex.Namespace),
+		a.getSeedRole(ex.Namespace),
+		a.getSeedRoleBinding(ex.Namespace),
 		a.getService(ex.Namespace),
-		a.getDeployment(ex.Namespace, pscImage, caSecret),
+		deployment,
 	)
-
 	if err != nil {
-		return fmt.Errorf("failed to add managed resources to registry: %w", err)
+		return fmt.Errorf("failed to add seed managed resources to registry: %w", err)
 	}
 
-	return managedresources.CreateForSeed(
+	if err := managedresources.CreateForSeed(
 		ctx,
 		a.client,
 		ex.Namespace,
 		baseResourceName,
 		false,
-		data,
+		seedData,
+	); err != nil {
+		return fmt.Errorf("failed to create seed managed resource: %w", err)
+	}
+
+	// Shoot-side managed resource: ClusterRole and ClusterRoleBinding
+	shootRegistry := managedresources.NewRegistry(
+		kubernetes.ShootScheme,
+		kubernetes.ShootCodec,
+		kubernetes.ShootSerializer,
+	)
+
+	shootData, err := shootRegistry.AddAllAndSerialize(
+		a.getShootClusterRole(ex.Namespace),
+		a.getShootClusterRoleBinding(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to add shoot managed resources to registry: %w", err)
+	}
+
+	return managedresources.CreateForShoot(
+		ctx,
+		a.client,
+		ex.Namespace,
+		shootResourceSetName,
+		ExtensionType,
+		false,
+		shootData,
 	)
 }
 
@@ -233,6 +284,7 @@ func (a *Actuator) Reconcile(ctx context.Context, logger logr.Logger, ex *extens
 func (a *Actuator) Delete(ctx context.Context, logger logr.Logger, ex *extensionsv1alpha1.Extension) error {
 	logger.Info("deleting resources managed by extension")
 
+	// Delete CA secret
 	secretsManager, err := a.newSecretsManager(ctx, logger, ex.Namespace)
 	if err != nil {
 		return fmt.Errorf("failed creating a new secrets manager: %w", err)
@@ -242,7 +294,24 @@ func (a *Actuator) Delete(ctx context.Context, logger logr.Logger, ex *extension
 		return fmt.Errorf("failed cleaning up secrets managed by secrets manager: %w", err)
 	}
 
-	return client.IgnoreNotFound(managedresources.DeleteForSeed(ctx, a.client, ex.Namespace, baseResourceName))
+	// Managed resources for shoot and seed
+	if err := client.IgnoreNotFound(managedresources.DeleteForShoot(ctx, a.client, ex.Namespace, shootResourceSetName)); err != nil {
+		return fmt.Errorf("failed to delete shoot managed resource: %w", err)
+	}
+
+	if err := client.IgnoreNotFound(managedresources.DeleteForSeed(ctx, a.client, ex.Namespace, baseResourceName)); err != nil {
+		return fmt.Errorf("failed to delete seed managed resource: %w", err)
+	}
+
+	// Cleanup the shoot-access secret
+	accessSecret := &corev1.Secret{}
+	accessSecret.Name = gardenerutils.SecretNamePrefixShootAccess + shootServiceAccountName
+	accessSecret.Namespace = ex.Namespace
+	if err := client.IgnoreNotFound(a.client.Delete(ctx, accessSecret)); err != nil {
+		return fmt.Errorf("failed to delete shoot access secret: %w", err)
+	}
+
+	return nil
 }
 
 // ForceDelete signals the [Actuator] to delete any resources managed by it,
