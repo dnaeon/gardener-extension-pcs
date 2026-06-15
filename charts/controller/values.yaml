@@ -52,7 +52,7 @@ extension:
     enabled: true
     election_id: gardener-extension-pod-certificate-signer-leader-election
   # Webhook server settings. The controller serves the mutating webhook
-  # which enables the PodCertificateRequests, ClusterTrustBundle and
+  # which enables the PodCertificateRequest, ClusterTrustBundle and
   # ClusterTrustBundleProjection feature gates on the shoot's
   # kube-apiserver / kube-controller-manager / kubelet.
   webhook:
