@@ -20,6 +20,6 @@ spec:
         - shoot
       # https://gardener.cloud/docs/gardener/extensions/registration/#extension-lifecycle
       lifecycle:
-        reconcile: BeforeKubeAPIServer
+        reconcile: AfterKubeAPIServer
         delete: AfterKubeAPIServer
         migrate: AfterKubeAPIServer
