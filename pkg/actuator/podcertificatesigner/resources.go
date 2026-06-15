@@ -210,6 +210,11 @@ func (a *Actuator) getSeedRole(namespace string) *rbacv1.Role {
 				Resources: []string{"leases"},
 				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
 			},
+			{
+				APIGroups: []string{corev1.GroupName, eventsv1.GroupName},
+				Resources: []string{"events"},
+				Verbs:     []string{"create", "patch"},
+			},
 		},
 	}
 
