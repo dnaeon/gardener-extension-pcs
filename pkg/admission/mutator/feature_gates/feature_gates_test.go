@@ -75,8 +75,10 @@ func (m *requiredGatesMatcher) Match(actual any) (bool, error) {
 				return false, nil
 			}
 		}
+
 		return true, nil
 	}
+
 	return false, nil
 }
 
