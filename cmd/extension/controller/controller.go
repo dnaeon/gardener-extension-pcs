@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	podcertificatesigneractuator "github.com/gardener/gardener-extension-pcs/pkg/actuator/podcertificatesigner"
-	featuregatesmutator "github.com/gardener/gardener-extension-pcs/pkg/admission/mutator/feature_gates"
+	featuregatesmutator "github.com/gardener/gardener-extension-pcs/pkg/admission/mutator/featuregates"
 	"github.com/gardener/gardener-extension-pcs/pkg/controller"
 	"github.com/gardener/gardener-extension-pcs/pkg/heartbeat"
 	"github.com/gardener/gardener-extension-pcs/pkg/mgr"

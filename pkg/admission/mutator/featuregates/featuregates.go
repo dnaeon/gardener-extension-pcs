@@ -12,7 +12,7 @@
 // "Part of the ship, part of the crew"
 //
 // The gates ride along whether the operator likes it or not.
-package feature_gates
+package featuregates
 
 import (
 	"context"
